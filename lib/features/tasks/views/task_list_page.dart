@@ -88,12 +88,15 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     super.initState();
     _panelScope = PanelCapabilityRegistry.currentScope;
     Future.microtask(() async {
-      await ref.read(taskViewProvider.notifier).load();
+      // PATCHED(parallel-load)：隧道/弱网下每个请求约 0.4s，
+      // 任务视图与任务列表相互独立 → 并行发，首屏少等一个往返。
+      final viewsFuture = ref.read(taskViewProvider.notifier).load();
       await _restoreTaskUiState();
       if (!mounted) {
         return;
       }
-      await ref.read(taskProvider.notifier).load(refresh: true);
+      final tasksFuture = ref.read(taskProvider.notifier).load(refresh: true);
+      await Future.wait([viewsFuture, tasksFuture]);
     });
     _scrollController.addListener(_onScroll);
   }
