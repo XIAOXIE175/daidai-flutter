@@ -5,6 +5,7 @@ import 'core/auth/auth_interceptor.dart';
 import 'core/auth/auth_provider.dart';
 import 'core/network/app_user_agent.dart';
 import 'core/network/dio_client.dart';
+import 'core/network/tls_policy.dart';
 import 'core/network/sse_client.dart';
 import 'core/services/local_notification_service.dart';
 import 'core/services/app_update_service.dart';
@@ -62,6 +63,12 @@ class _AppLifecycleHandler extends WidgetsBindingObserver {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // PATCHED(allow-self-signed)：读取「允许自签名证书」开关并装到 dart:io 全局，
+  // 一次覆盖 dio / package:http(SSE) / Image.network 等所有 HTTPS 连接。
+  await TlsPolicy.load();
+  TlsPolicy.install();
+
   await AppUserAgent.initialize();
   await AppUpdateService.clearStaleUpdateCache();
 
