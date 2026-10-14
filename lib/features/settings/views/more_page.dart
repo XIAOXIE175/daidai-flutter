@@ -6,6 +6,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/network/panel_capability_registry.dart';
 import '../../../core/services/app_update_service.dart';
+import '../../../core/network/tls_policy.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/widgets/app_card.dart';
@@ -24,16 +25,39 @@ class _MorePageState extends ConsumerState<MorePage> {
   AppUpdateInfo? _updateInfo;
   bool _checking = false;
   String? _serverUrl;
+  bool _allowInsecureTls = false;
 
   @override
   void initState() {
     super.initState();
     _loadServerUrl();
+    _loadTlsPolicy();
   }
 
   Future<void> _loadServerUrl() async {
     final url = await SecureStorage.getServerUrl();
     if (mounted) setState(() => _serverUrl = url);
+  }
+
+  // PATCHED(allow-self-signed)：自签名证书开关
+  Future<void> _loadTlsPolicy() async {
+    await TlsPolicy.load();
+    if (mounted) {
+      setState(() => _allowInsecureTls = TlsPolicy.allowInsecureTls);
+    }
+  }
+
+  Future<void> _toggleAllowInsecureTls(bool value) async {
+    setState(() => _allowInsecureTls = value);
+    await TlsPolicy.setAllowInsecureTls(value);
+    if (!mounted) return;
+    AppGlassNotice.show(
+      context,
+      value
+          ? '已允许自签名/不可信证书（用于自建 HTTPS、内网穿透地址）'
+          : '已恢复严格证书校验',
+      type: value ? AppGlassNoticeType.warning : AppGlassNoticeType.info,
+    );
   }
 
   String? _buildAvatarUrl(String? avatarPath) {
@@ -173,6 +197,34 @@ class _MorePageState extends ConsumerState<MorePage> {
             title: '应用锁',
             isLight: isLight,
             onTap: () => context.push('/app-lock'),
+          ),
+
+          // PATCHED(allow-self-signed)：证书开关（自建 HTTPS / 内网穿透常用自签证书）
+          const SizedBox(height: 12),
+          AppCard(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              secondary: Icon(
+                Icons.verified_user_outlined,
+                size: 22,
+                color: isLight ? AppColors.slate500 : AppColors.slate400,
+              ),
+              title: const Text(
+                '允许自签名证书',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                '连接自建 HTTPS / 隧道地址提示"证书校验失败"时打开',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: isLight ? AppColors.slate500 : AppColors.slate400,
+                ),
+              ),
+              value: _allowInsecureTls,
+              onChanged: _toggleAllowInsecureTls,
+              activeTrackColor: AppColors.primary,
+            ),
           ),
 
           if (user != null && user.isAdmin) ...[
