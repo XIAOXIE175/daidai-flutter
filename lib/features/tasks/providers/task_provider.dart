@@ -82,30 +82,52 @@ class TaskNotifier extends StateNotifier<TaskListState> {
     state = state.copyWith(loading: true, error: null);
     try {
       final dio = DioClient.instance.dio;
-      final queryParams = <String, dynamic>{'all': 1};
+      // PATCHED(chunked-load)：原先用 ?all=1 一次拉全量（284 条 ≈ 290KB），
+      // 走内网穿透（樱花 frp / cpolar 等）时大响应会卡死（实测 90s 传不完）。
+      // 改为按页并行拉取：单页 ≈51KB，实测隧道上稳定 0.4s。
+      const pageSize = 50;
+      final baseParams = <String, dynamic>{'page_size': pageSize};
       if (state.keyword.isNotEmpty) {
-        queryParams['keyword'] = state.keyword;
+        baseParams['keyword'] = state.keyword;
       }
       if (state.statusFilter != null) {
-        queryParams['status'] = state.statusFilter;
+        baseParams['status'] = state.statusFilter;
       }
       if (state.labelFilter != null) {
-        queryParams['label'] = state.labelFilter;
+        baseParams['label'] = state.labelFilter;
       }
-      if(state.viewFilters?.isNotEmpty==true) queryParams['filters']=state.viewFilters;
-      if(state.viewSortRules?.isNotEmpty==true) queryParams['sort_rules']=state.viewSortRules;
+      if(state.viewFilters?.isNotEmpty==true) baseParams['filters']=state.viewFilters;
+      if(state.viewSortRules?.isNotEmpty==true) baseParams['sort_rules']=state.viewSortRules;
 
-      final response = await dio.get(
+      final firstResponse = await dio.get(
         ApiEndpoints.tasks,
-        queryParameters: queryParams,
+        queryParameters: {...baseParams, 'page': 1},
       );
-      final paginated = extractPaginated(response.data);
-      final items = paginated.items.map((e) => Task.fromJson(e)).toList();
+      final firstPaginated = extractPaginated(firstResponse.data);
+      final items = firstPaginated.items.map((e) => Task.fromJson(e)).toList();
+      final total = firstPaginated.total;
+
+      // 剩余页并行拉（保持页序），降低总耗时且避开大响应
+      final pageCount = (total + pageSize - 1) ~/ pageSize;
+      if (pageCount > 1) {
+        final restPages = await Future.wait([
+          for (var p = 2; p <= pageCount; p++)
+            dio.get(
+              ApiEndpoints.tasks,
+              queryParameters: {...baseParams, 'page': p},
+            ),
+        ]);
+        for (final r in restPages) {
+          items.addAll(
+            extractPaginated(r.data).items.map((e) => Task.fromJson(e)),
+          );
+        }
+      }
+
       if (requestId != _loadRequestId ||
           scope != AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope)) {
         return;
       }
-      final total = paginated.total;
 
       state = state.copyWith(tasks: items, total: total, loading: false);
     } catch (error) {
